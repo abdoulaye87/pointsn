@@ -1,45 +1,52 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
-// GET - Return site content for a given slug (NO CACHING)
+// GET - Retourne les données client + site pour un slug donné (pour polling)
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url)
-  const slug = searchParams.get('slug')
+  try {
+    const { searchParams } = new URL(request.url)
+    const slug = searchParams.get('slug')
 
-  if (!slug) {
-    return NextResponse.json({ error: 'Slug requis' }, { status: 400 })
+    if (!slug) {
+      return NextResponse.json({ error: 'slug requis' }, { status: 400 })
+    }
+
+    const { data: client, error: clientError } = await supabase
+      .from('clients')
+      .select('*')
+      .eq('slug', slug)
+      .single()
+
+    if (clientError || !client) {
+      return NextResponse.json({ error: 'Client non trouvé' }, { status: 404 })
+    }
+
+    // Supabase might return old cached data, force fresh read with cache bypass
+    const { data: siteContent } = await supabase
+      .from('site_contents')
+      .select('*')
+      .eq('client_id', client.id)
+      .single()
+
+    return NextResponse.json({
+      client: {
+        name: client.name,
+        activity: client.activity,
+        city: client.city,
+        whatsapp: client.whatsapp,
+      },
+      hasSite: !!siteContent,
+      site: siteContent ? {
+        html: siteContent.html_content,
+        css: siteContent.css_content,
+      } : null,
+    }, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'Pragma': 'no-cache',
+      },
+    })
+  } catch (error) {
+    return NextResponse.json({ error: 'Erreur' }, { status: 500 })
   }
-
-  const { data: client, error: clientError } = await supabase
-    .from('clients')
-    .select('id, name, activity, city, slug')
-    .eq('slug', slug)
-    .single()
-
-  if (clientError || !client) {
-    return NextResponse.json({ error: 'Non trouvé' }, { status: 404 })
-  }
-
-  const { data: siteContent } = await supabase
-    .from('site_contents')
-    .select('id, html_content, css_content, generated_at')
-    .eq('client_id', client.id)
-    .single()
-
-  return new NextResponse(JSON.stringify({
-    hasSite: !!siteContent,
-    client,
-    site: siteContent ? {
-      html: siteContent.html_content,
-      css: siteContent.css_content,
-    } : null,
-  }), {
-    status: 200,
-    headers: {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0, s-maxage=0',
-      'Pragma': 'no-cache',
-      'Expires': '0',
-    },
-  })
 }
