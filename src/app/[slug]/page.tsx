@@ -4,18 +4,6 @@ import { notFound } from 'next/navigation'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-async function triggerGeneration(clientId: string, baseUrl: string) {
-  try {
-    await fetch(`${baseUrl}/api/generate-site`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientId })
-    })
-  } catch (error) {
-    console.error('Erreur génération:', error)
-  }
-}
-
 export default async function SitePage({ 
   params 
 }: { 
@@ -41,22 +29,15 @@ export default async function SitePage({
     .eq('client_id', client.id)
     .single()
 
-  // Si pas de site généré, déclencher la génération et afficher page d'attente
+  // Si pas de site généré, afficher page d'attente
   if (!siteContent) {
-    // Déclencher la génération
-    const baseUrl = process.env.VERCEL_URL 
-      ? `https://${process.env.VERCEL_URL}` 
-      : 'http://localhost:3000'
-    
-    triggerGeneration(client.id, baseUrl)
-
     return (
       <html lang="fr">
         <head>
           <meta charSet="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <title>{client.name} - Génération en cours</title>
-          <meta httpEquiv="refresh" content="5" />
+          <title>{client.name} - Site en cours de création</title>
+          <meta httpEquiv="refresh" content="30" />
           <style dangerouslySetInnerHTML={{ __html: `
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body { 
@@ -69,28 +50,38 @@ export default async function SitePage({
               color: white;
               padding: 1rem;
             }
-            .container { text-align: center; max-width: 400px; }
-            h1 { font-size: 2rem; margin-bottom: 0.5rem; }
-            .activity { font-size: 1.1rem; opacity: 0.9; margin-bottom: 1.5rem; }
+            .container { text-align: center; max-width: 420px; }
+            h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
+            .activity { font-size: 1.1rem; opacity: 0.9; margin-bottom: 2rem; }
             .card {
               background: rgba(255,255,255,0.15);
               backdrop-filter: blur(10px);
-              border-radius: 16px;
-              padding: 2rem;
+              border-radius: 20px;
+              padding: 2.5rem 2rem;
               margin-bottom: 1.5rem;
             }
+            .icon { font-size: 4rem; margin-bottom: 1rem; display: block; }
             .loader {
-              width: 50px;
-              height: 50px;
+              width: 44px;
+              height: 44px;
               border: 3px solid rgba(255,255,255,0.3);
               border-top-color: white;
               border-radius: 50%;
               animation: spin 1s linear infinite;
-              margin: 0 auto 1rem;
+              margin: 0 auto 1.2rem;
             }
             @keyframes spin { to { transform: rotate(360deg); } }
-            .info { font-size: 0.95rem; opacity: 0.9; }
-            .refresh { font-size: 0.85rem; opacity: 0.7; margin-top: 1rem; }
+            .title { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.5rem; }
+            .info { font-size: 0.9rem; opacity: 0.85; line-height: 1.5; }
+            .steps { text-align: left; margin-top: 1.5rem; font-size: 0.85rem; opacity: 0.8; }
+            .steps div { padding: 0.4rem 0; }
+            .steps .done { opacity: 0.6; text-decoration: line-through; }
+            .refresh { 
+              font-size: 0.8rem; opacity: 0.6; margin-top: 1.5rem; 
+              display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+            }
+            .pulse { animation: pulse 2s ease-in-out infinite; }
+            @keyframes pulse { 0%,100% { opacity: 0.6; } 50% { opacity: 1; } }
             .whatsapp {
               display: inline-flex;
               align-items: center;
@@ -101,7 +92,7 @@ export default async function SitePage({
               border-radius: 50px;
               text-decoration: none;
               font-weight: 600;
-              margin-top: 1rem;
+              font-size: 0.95rem;
             }
           `}} />
         </head>
@@ -111,10 +102,20 @@ export default async function SitePage({
             <p className="activity">{client.activity} • {client.city}</p>
             
             <div className="card">
+              <span className="icon">🎨</span>
               <div className="loader"></div>
-              <p className="info">🎨 Génération de votre site en cours...</p>
-              <p className="refresh">Cette page se rafraîchit automatiquement</p>
+              <p className="title">Votre site est en cours de création</p>
+              <p className="info">
+                Notre IA est en train de concevoir votre site web unique. Cela prend environ 1 à 2 minutes.
+              </p>
+              <div className="steps">
+                <div className="done">✅ Informations enregistrées</div>
+                <div>🔄 Design IA en cours...</div>
+                <div>⏳ Publication imminente</div>
+              </div>
             </div>
+
+            <p className="refresh pulse">La page se rafraîchit automatiquement toutes les 30 secondes</p>
 
             <a 
               href={`https://wa.me/${client.whatsapp.replace(/[^0-9]/g, '')}`} 
@@ -122,7 +123,7 @@ export default async function SitePage({
               target="_blank"
               rel="noopener noreferrer"
             >
-              💬 Nous contacter
+              💬 Nous contacter sur WhatsApp
             </a>
           </div>
         </body>

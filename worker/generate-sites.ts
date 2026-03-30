@@ -91,7 +91,8 @@ Réponds UNIQUEMENT en JSON: {"html": "...", "css": "..."}`
 }
 
 async function processPendingClients() {
-  const { data: clients } = await supabase.from('clients').select('id, name, activity, city, address, whatsapp, slug').order('created_at', { ascending: true })
+  // Traiter les plus récents en premier (ceux que les clients viennent de créer)
+  const { data: clients } = await supabase.from('clients').select('id, name, activity, city, address, whatsapp, slug').order('created_at', { ascending: false })
   if (!clients?.length) { console.log('Aucun client'); return }
 
   const { data: existingSites } = await supabase.from('site_contents').select('client_id')
