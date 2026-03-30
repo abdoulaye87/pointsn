@@ -80,7 +80,11 @@ export async function DELETE(
   const { id } = await params
 
   // Suppression réservée à l'admin
-  if (!clientId(request)) {
+  const authHeader = request.headers.get('authorization')
+  const ADMIN_SECRET = process.env.ADMIN_SECRET || 'iasn-admin-2024'
+  const isAdminUser = authHeader?.startsWith('Bearer ') && authHeader.slice(7) === ADMIN_SECRET
+
+  if (!isAdminUser) {
     return NextResponse.json({ error: 'Non autorisé' }, { status: 401 })
   }
 
@@ -95,8 +99,3 @@ export async function DELETE(
   }
 }
 
-function isAdmin(request: NextRequest): boolean {
-  const authHeader = request.headers.get('authorization')
-  const ADMIN_SECRET = process.env.ADMIN_SECRET || 'iasn-admin-2024'
-  return authHeader?.startsWith('Bearer ') && authHeader.slice(7) === ADMIN_SECRET
-}

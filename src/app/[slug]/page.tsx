@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useMemo, use } from 'react'
+import { useEffect, useState, useMemo } from 'react'
+import { useParams } from 'next/navigation'
 
 /**
  * Extrait le contenu du body depuis un HTML complet généré par l'IA.
@@ -48,7 +49,8 @@ function extractBodyContent(html: string): { body: string; extraCss: string } {
 }
 
 export default function SitePage() {
-  const { slug } = use()
+  const params = useParams()
+  const slug = params.slug as string
   const [loading, setLoading] = useState(true)
   const [hasSite, setHasSite] = useState(false)
   const [client, setClient] = useState<any>(null)
