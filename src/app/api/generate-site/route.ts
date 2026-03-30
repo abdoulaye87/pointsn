@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { generateSiteWithAI } from '@/lib/ai-service'
 
-// POST - Générer un site avec l'IA
+// POST - Marquer un site pour régénération (le worker le traitera)
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -22,30 +21,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Client non trouvé' }, { status: 404 })
     }
 
-    console.log(`🎨 Génération site IA pour ${client.name}...`)
-
-    const { html, css } = await generateSiteWithAI({
-      name: client.name,
-      activity: client.activity,
-      city: client.city,
-      address: client.address,
-      whatsapp: client.whatsapp,
-    })
-
-    const { error } = await supabase
+    // Supprimer l'ancien site_content pour que le worker le régénère
+    const { error: deleteError } = await supabase
       .from('site_contents')
-      .upsert({
-        client_id: clientId,
-        html_content: html,
-        css_content: css,
-        generated_at: new Date().toISOString()
-      })
+      .delete()
+      .eq('client_id', clientId)
 
-    if (error) throw error
-
-    return NextResponse.json({ 
-      success: true, 
-      siteUrl: `/${client.slug}` 
+    return NextResponse.json({
+      success: true,
+      message: 'Site marqué pour régénération par IA',
+      siteUrl: `/${client.slug}`
     })
 
   } catch (error) {
@@ -54,7 +39,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// GET - Régénérer un site
+// GET - Marquer un site pour régénération
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -74,30 +59,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Client non trouvé' }, { status: 404 })
     }
 
-    console.log(`🎨 Régénération site IA pour ${client.name}...`)
+    await supabase.from('site_contents').delete().eq('client_id', clientId)
 
-    const { html, css } = await generateSiteWithAI({
-      name: client.name,
-      activity: client.activity,
-      city: client.city,
-      address: client.address,
-      whatsapp: client.whatsapp,
-    })
-
-    const { error } = await supabase
-      .from('site_contents')
-      .upsert({
-        client_id: clientId,
-        html_content: html,
-        css_content: css,
-        generated_at: new Date().toISOString()
-      })
-
-    if (error) throw error
-
-    return NextResponse.json({ 
-      success: true, 
-      siteUrl: `/${client.slug}` 
+    return NextResponse.json({
+      success: true,
+      message: 'Site marqué pour régénération par IA',
+      siteUrl: `/${client.slug}`
     })
 
   } catch (error) {
