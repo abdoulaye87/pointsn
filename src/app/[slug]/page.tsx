@@ -1,6 +1,51 @@
 'use client'
 
-import { useEffect, useState, use } from 'react'
+import { useEffect, useState, useMemo, use } from 'react'
+
+/**
+ * Extrait le contenu du body depuis un HTML complet généré par l'IA.
+ * L'IA génère souvent un document HTML complet (<!DOCTYPE html><html><head>...<body>...</body></html>).
+ * Comme on est déjà dans le layout Next.js (qui fournit <html><body>),
+ * on ne garde que le contenu intérieur.
+ */
+function extractBodyContent(html: string): { body: string; extraCss: string } {
+  // 1. Essayer d'extraire le contenu entre <body> et </body>
+  const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i)
+  if (bodyMatch) {
+    // 2. Extraire les <style> du <head> comme CSS supplémentaire
+    let extraCss = ''
+    const headMatch = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i)
+    if (headMatch) {
+      const styleMatches = headMatch[1].matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)
+      for (const m of styleMatches) {
+        extraCss += m[1] + '\n'
+      }
+    }
+    return { body: bodyMatch[1].trim(), extraCss }
+  }
+
+  // 3. Pas de <body> trouvé — nettoyer le HTML
+  let cleaned = html
+    .replace(/<!DOCTYPE[^>]*>/gi, '')
+    .replace(/<html[^>]*>/gi, '')
+    .replace(/<\/html>/gi, '')
+    .replace(/<head[^>]*>[\s\S]*?<\/head>/gi, '')
+    .replace(/<\/body>/gi, '')
+    .replace(/<body[^>]*>/gi, '')
+    .trim()
+
+  // Extraire les styles du head si présents
+  let extraCss = ''
+  const headStyles = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i)
+  if (headStyles) {
+    const styleMatches = headStyles[1].matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)
+    for (const m of styleMatches) {
+      extraCss += m[1] + '\n'
+    }
+  }
+
+  return { body: cleaned, extraCss }
+}
 
 export default function SitePage() {
   const { slug } = use()
@@ -169,14 +214,20 @@ export default function SitePage() {
     )
   }
 
+  // Extraire le body du HTML généré (l'IA génère souvent un document complet)
+  const { body: siteBody, extraCss } = useMemo(() => {
+    if (!site?.html) return { body: '', extraCss: '' }
+    return extractBodyContent(site.html)
+  }, [site?.html])
+
   // ──────────────────────────────────────────────
   // État 4 : Site prêt !
   // ──────────────────────────────────────────────
   if (hasSite && site) {
     return (
       <>
-        <style dangerouslySetInnerHTML={{ __html: site.css || '' }} />
-        <div dangerouslySetInnerHTML={{ __html: site.html }} />
+        <style dangerouslySetInnerHTML={{ __html: `${site.css || ''}\n${extraCss}` }} />
+        <div dangerouslySetInnerHTML={{ __html: siteBody }} />
       </>
     )
   }

@@ -25,7 +25,7 @@ async function callAI(prompt: string, systemPrompt: string, maxRetries = 2): Pro
       const messages: { role: string; content: string }[] = []
       if (systemPrompt) messages.push({ role: 'system', content: systemPrompt })
       messages.push({ role: 'user', content: prompt })
-      const completion = await zai.chat.completions.create({ messages, temperature: 0.9, max_tokens: 8000 })
+      const completion = await zai.chat.completions.create({ messages, temperature: 0.7, max_tokens: 16000 })
       const content = completion.choices?.[0]?.message?.content
       if (!content) throw new Error('Pas de reponse')
       return content
@@ -64,29 +64,54 @@ function parseAIJSON(content: string): { html: string; css: string } {
     try { const r = JSON.parse(candidate); if (r.html && r.css) return r } catch {}
   }
 
-  // Extraire html et css manuellement si possible
-  const htmlMatch = clean.match(/"html"\s*:\s*"((?:[^"\\]|\\.)*)"/s)
-  const cssMatch = clean.match(/"css"\s*:\s*"((?:[^"\\]|\\.)*)"/s)
-  if (htmlMatch && cssMatch) {
-    return { html: htmlMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n'), css: cssMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n') }
+  // Extraire html et css manuellement si possible (même si JSON tronqué)
+  const htmlStart = clean.indexOf('"html"')
+  const cssStart = clean.indexOf('"css"')
+  if (htmlStart !== -1 && cssStart !== -1) {
+    // Extraire HTML: trouver le premier " après "html":
+    const htmlValueStart = clean.indexOf('"', clean.indexOf(':', htmlStart)) + 1
+    // Extraire CSS: trouver le premier " après "css":
+    const cssValueStart = clean.indexOf('"', clean.indexOf(':', cssStart)) + 1
+    // HTML va jusqu'à juste avant "css"
+    const htmlValue = clean.substring(htmlValueStart, cssStart - 1).replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\t/g, '\t').trim()
+    // CSS va jusqu'à la fin (peut être tronqué)
+    let cssValue = clean.substring(cssValueStart).replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\t/g, '\t')
+    // Fermer les accolades CSS si tronqué
+    const openBraces = (cssValue.match(/\{/g) || []).length
+    const closeBraces = (cssValue.match(/\}/g) || []).length
+    cssValue += '}'.repeat(Math.max(0, openBraces - closeBraces))
+    // Retirer le dernier " si présent
+    cssValue = cssValue.replace(/"\s*$/, '').trim()
+    if (htmlValue.length > 50 && cssValue.length > 20) {
+      return { html: htmlValue, css: cssValue }
+    }
   }
 
-  throw new Error('JSON invalide: ' + clean.substring(0, 200))
+  throw new Error('JSON invalide: ' + clean.substring(0, 300))
 }
 
 async function generateSite(client: any): Promise<{ html: string; css: string }> {
-  const prompt = `Crée un site web MODERNE et PROFESSIONNEL pour:
-ENTREPRISE: ${client.name}
-ACTIVITE: ${client.activity}
-VILLE: ${client.city}
-ADRESSE: ${client.address}
-TEL: ${client.whatsapp}
-GÉNÈRE UN SITE COMPLET AVEC: Hero, A propos, Services (4-6), Témoignages (3), Contact (WhatsApp: https://wa.me/${client.whatsapp.replace(/[^0-9]/g, '')}), Footer, Bouton WhatsApp flottant.
-STYLE: LUXUEUX, animations CSS, hover effects, 100% responsive mobile-first.
-Réponds UNIQUEMENT en JSON: {"html": "...", "css": "..."}`
+  const phone = client.whatsapp.replace(/[^0-9]/g, '')
+  const prompt = `Crée un site web compact et professionnel pour:
+Entreprise: ${client.name}
+Activité: ${client.activity}
+Ville: ${client.city}
+Téléphone: ${client.whatsapp}
 
-  const systemPrompt = 'Tu es un expert en creation de sites web modernes. Reponds UNIQUEMENT en JSON valide avec "html" et "css".'
-  const content = await callAI(prompt, systemPrompt)
+SECTIONS: Hero, Services (3 max), Contact avec lien WhatsApp (https://wa.me/${phone}), Footer.
+Bouton WhatsApp flottant.
+
+CONTRAINTES IMPORTANTES:
+- HTML COMPACT: max 150 lignes, pas de commentaires, classes CSS courtes (a,b,c,d...)
+- CSS COMPACT: max 200 lignes, utiliser des variables CSS pour les couleurs
+- Responsive mobile-first
+- Style moderne avec dégradés
+
+Réponds UNIQUEMENT en JSON valide: {"html":"...","css":"..."}
+Pas de texte avant ou après le JSON.`
+
+  const systemPrompt = `Tu es un expert web. Tu DOIS répondre UNIQUEMENT avec un objet JSON valide contenant exactement deux clés: "html" (le contenu HTML sans DOCTYPE ni head) et "css" (les styles CSS). Le JSON doit être complet et fermé correctement. Ne jamais tronquer ta réponse.`
+  const content = await callAI(prompt, systemPrompt, 3)
   return parseAIJSON(content)
 }
 
