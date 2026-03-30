@@ -57,6 +57,8 @@ export default function Home() {
   const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
   const [adminClients, setAdminClients] = useState<any[]>([]);
   const [viewMode, setViewMode] = useState<'main' | 'admin'>('main');
+  const [adminKey, setAdminKey] = useState('');
+  const [showAdminLogin, setShowAdminLogin] = useState(false);
 
   // Filtered domains
   const filteredDomains = useMemo(() => {
@@ -68,9 +70,19 @@ export default function Home() {
     return popularDomains.map(id => domains[id]).filter(Boolean);
   }, []);
 
+  const authHeaders = () => ({
+    'Content-Type': 'application/json',
+    'X-Client-Id': localStorage.getItem('iasn_client_id') || '',
+  });
+
+  const adminHeaders = () => ({
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${localStorage.getItem('iasn_admin_key') || ''}`,
+  });
+
   const fetchClient = async (clientId: string) => {
     try {
-      const res = await fetch(`/api/clients/${clientId}`);
+      const res = await fetch(`/api/clients/${clientId}`, { headers: authHeaders() });
       if (res.ok) {
         const data = await res.json();
         setCreatedClient(data);
@@ -150,7 +162,7 @@ export default function Home() {
     try {
       const res = await fetch('/api/modifications', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({
           clientId: createdClient.id,
           request: modificationRequest,
@@ -176,7 +188,7 @@ export default function Home() {
 
   const loadAdminData = async () => {
     try {
-      const res = await fetch('/api/admin');
+      const res = await fetch('/api/admin', { headers: adminHeaders() });
       if (res.ok) {
         const data = await res.json();
         setAdminStats(data.stats);
@@ -191,7 +203,7 @@ export default function Home() {
     try {
       const res = await fetch('/api/payments', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminHeaders(),
         body: JSON.stringify({ clientId, action }),
       });
       
@@ -230,17 +242,48 @@ export default function Home() {
       <div className="min-h-screen bg-white flex flex-col items-center justify-center p-6">
         <button
           onClick={() => {
-            setViewMode(viewMode === 'main' ? 'admin' : 'main');
             if (viewMode === 'admin') {
+              setViewMode('main');
+              setScreen('welcome');
+            } else if (localStorage.getItem('iasn_admin_key')) {
+              setViewMode('admin');
+              loadAdminData();
               setScreen('admin');
             } else {
-              loadAdminData();
+              setShowAdminLogin(true);
             }
           }}
           className="absolute top-4 right-4 p-2 text-gray-400 hover:text-gray-600"
         >
           <Settings className="w-5 h-5" />
         </button>
+
+        {showAdminLogin && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-sm">
+              <h3 className="text-lg font-bold mb-4">🔐 Accès Admin</h3>
+              <input
+                type="password"
+                value={adminKey}
+                onChange={(e) => setAdminKey(e.target.value)}
+                placeholder="Clé admin"
+                className="w-full p-3 border-2 rounded-xl mb-4 text-center"
+              />
+              <div className="flex gap-2">
+                <Button onClick={() => setShowAdminLogin(false)} variant="outline" className="flex-1">Annuler</Button>
+                <Button onClick={() => {
+                  localStorage.setItem('iasn_admin_key', adminKey);
+                  setShowAdminLogin(false);
+                  setViewMode('admin');
+                  loadAdminData();
+                  setScreen('admin');
+                }} disabled={!adminKey.trim()} className="flex-1 bg-blue-500 hover:bg-blue-600">
+                  Connexion
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="mb-8">
           <img src="/illustration.png" alt="Créer un site internet" className="w-40 h-40 object-contain" />

@@ -1,53 +1,59 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { withAuth, withAdminAuth } from '@/lib/auth'
 
-// GET - List all modifications
-export async function GET() {
-  try {
-    // Récupérer les modifications
+// GET - List modifications (ADMIN sees all, CLIENT sees only own modifications)
+export async function GET(request: NextRequest) {
+  return withAuth(request, async (clientId?: string) => {
+    if (clientId) {
+      const { data: modifications, error } = await supabase
+        .from('modifications')
+        .select('*')
+        .eq('client_id', clientId)
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+      return NextResponse.json(modifications)
+    }
+
+    // Admin
     const { data: modifications, error } = await supabase
       .from('modifications')
       .select('*')
       .order('created_at', { ascending: false })
 
-    if (error) {
-      throw error
-    }
+    if (error) throw error
 
-    // Récupérer les clients associés
     const clientIds = [...new Set(modifications?.map(m => m.client_id) || [])]
-    const { data: clients } = await supabase
-      .from('clients')
-      .select('*')
-      .in('id', clientIds)
+    const { data: clients } = await supabase.from('clients').select('*').in('id', clientIds)
 
-    // Combiner les données
     const modificationsWithClients = modifications?.map(modification => ({
       ...modification,
       client: clients?.find(c => c.id === modification.client_id) || null
     }))
 
     return NextResponse.json(modificationsWithClients)
-  } catch (error) {
-    console.error('Error fetching modifications:', error)
-    return NextResponse.json(
-      { error: 'Erreur lors de la récupération des modifications' },
-      { status: 500 }
-    )
-  }
+  })
 }
 
-// POST - Create a modification request
+// POST - Create modification request (CLIENT creates for themselves)
 export async function POST(request: NextRequest) {
+  const clientId = request.headers.get('x-client-id')
+  if (!clientId) {
+    return NextResponse.json({ error: 'Non autorisé' }, { status: 401 })
+  }
+
   try {
     const body = await request.json()
-    const { clientId, request: modificationRequest } = body
+    const { clientId: bodyClientId, request: modificationRequest } = body
 
-    if (!clientId || !modificationRequest) {
-      return NextResponse.json(
-        { error: 'ID client et demande requis' },
-        { status: 400 }
-      )
+    if (!modificationRequest) {
+      return NextResponse.json({ error: 'Demande requise' }, { status: 400 })
+    }
+
+    // Le client ne peut créer une demande que pour lui-même
+    if (bodyClientId && bodyClientId !== clientId) {
+      return NextResponse.json({ error: 'Non autorisé' }, { status: 403 })
     }
 
     const { data: modification, error } = await supabase
@@ -60,31 +66,23 @@ export async function POST(request: NextRequest) {
       .select()
       .single()
 
-    if (error) {
-      throw error
-    }
+    if (error) throw error
 
     return NextResponse.json(modification)
   } catch (error) {
     console.error('Error creating modification:', error)
-    return NextResponse.json(
-      { error: 'Erreur lors de la création de la demande' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Erreur serveur' }, { status: 500 })
   }
 }
 
-// PUT - Update modification status
+// PUT - Update modification status (ADMIN ONLY)
 export async function PUT(request: NextRequest) {
-  try {
+  return withAdminAuth(request, async () => {
     const body = await request.json()
     const { id, status } = body
 
     if (!id || !status) {
-      return NextResponse.json(
-        { error: 'ID et statut requis' },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: 'ID et statut requis' }, { status: 400 })
     }
 
     const { data: modification, error } = await supabase
@@ -94,16 +92,8 @@ export async function PUT(request: NextRequest) {
       .select()
       .single()
 
-    if (error) {
-      throw error
-    }
+    if (error) throw error
 
     return NextResponse.json(modification)
-  } catch (error) {
-    console.error('Error updating modification:', error)
-    return NextResponse.json(
-      { error: 'Erreur lors de la mise à jour' },
-      { status: 500 }
-    )
-  }
+  })
 }

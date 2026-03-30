@@ -1,66 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { withAuth } from '@/lib/auth'
 
-// GET - Get a specific client by ID or slug
+// GET - Get client by ID (CLIENT can only see own data, ADMIN sees all)
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  try {
+  return withAuth(request, async (clientId?: string) => {
     const { id } = await params
 
-    // Try to find by ID first (UUID format)
-    let query = supabase
-      .from('clients')
-      .select('*')
-    
-    // Check if it's a UUID or a slug
+    // Client ne peut voir que ses propres données
+    if (clientId && clientId !== id) {
+      return NextResponse.json({ error: 'Non autorisé' }, { status: 403 })
+    }
+
     const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
     
-    if (isUUID) {
-      query = query.eq('id', id)
-    } else {
-      query = query.eq('slug', id)
-    }
+    const query = isUUID
+      ? supabase.from('clients').select('*').eq('id', id)
+      : supabase.from('clients').select('*').eq('slug', id)
 
     const { data: client, error } = await query.single()
 
     if (error || !client) {
-      // If not found by ID and it wasn't a slug search, try by slug
-      if (isUUID) {
-        const { data: clientBySlug, error: slugError } = await supabase
-          .from('clients')
-          .select('*')
-          .eq('slug', id)
-          .single()
-
-        if (slugError || !clientBySlug) {
-          return NextResponse.json(
-            { error: 'Client non trouvé' },
-            { status: 404 }
-          )
-        }
-
-        // Get payments and modifications
-        const [paymentsResult, modificationsResult] = await Promise.all([
-          supabase.from('payments').select('*').eq('client_id', clientBySlug.id),
-          supabase.from('modifications').select('*').eq('client_id', clientBySlug.id)
-        ])
-
-        return NextResponse.json({
-          ...clientBySlug,
-          payments: paymentsResult.data || [],
-          modifications: modificationsResult.data || []
-        })
-      }
-
-      return NextResponse.json(
-        { error: 'Client non trouvé' },
-        { status: 404 }
-      )
+      return NextResponse.json({ error: 'Client non trouvé' }, { status: 404 })
     }
 
-    // Get payments and modifications
+    // Client ne peut accéder qu'à son propre profil
+    if (clientId && client.id !== clientId) {
+      return NextResponse.json({ error: 'Non autorisé' }, { status: 403 })
+    }
+
     const [paymentsResult, modificationsResult] = await Promise.all([
       supabase.from('payments').select('*').eq('client_id', client.id),
       supabase.from('modifications').select('*').eq('client_id', client.id)
@@ -71,23 +42,22 @@ export async function GET(
       payments: paymentsResult.data || [],
       modifications: modificationsResult.data || []
     })
-  } catch (error) {
-    console.error('Error fetching client:', error)
-    return NextResponse.json(
-      { error: 'Erreur lors de la récupération du client' },
-      { status: 500 }
-    )
-  }
+  })
 }
 
-// PUT - Update a client
+// PUT - Update client (CLIENT can only update own data, ADMIN can update all)
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  try {
+  return withAuth(request, async (clientId?: string) => {
     const { id } = await params
     const body = await request.json()
+
+    // Client ne peut modifier que ses propres données
+    if (clientId && clientId !== id) {
+      return NextResponse.json({ error: 'Non autorisé' }, { status: 403 })
+    }
 
     const { data: client, error } = await supabase
       .from('clients')
@@ -96,43 +66,37 @@ export async function PUT(
       .select()
       .single()
 
-    if (error) {
-      throw error
-    }
+    if (error) throw error
 
     return NextResponse.json(client)
-  } catch (error) {
-    console.error('Error updating client:', error)
-    return NextResponse.json(
-      { error: 'Erreur lors de la mise à jour du client' },
-      { status: 500 }
-    )
-  }
+  })
 }
 
-// DELETE - Delete a client
+// DELETE - Delete client (ADMIN ONLY)
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params
+
+  // Suppression réservée à l'admin
+  if (!clientId(request)) {
+    return NextResponse.json({ error: 'Non autorisé' }, { status: 401 })
+  }
+
   try {
-    const { id } = await params
-
-    const { error } = await supabase
-      .from('clients')
-      .delete()
-      .eq('id', id)
-
-    if (error) {
-      throw error
-    }
+    const { error } = await supabase.from('clients').delete().eq('id', id)
+    if (error) throw error
 
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error('Error deleting client:', error)
-    return NextResponse.json(
-      { error: 'Erreur lors de la suppression du client' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Erreur serveur' }, { status: 500 })
   }
+}
+
+function isAdmin(request: NextRequest): boolean {
+  const authHeader = request.headers.get('authorization')
+  const ADMIN_SECRET = process.env.ADMIN_SECRET || 'iasn-admin-2024'
+  return authHeader?.startsWith('Bearer ') && authHeader.slice(7) === ADMIN_SECRET
 }

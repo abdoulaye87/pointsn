@@ -1,9 +1,40 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { withAuth } from '@/lib/auth'
 
-// GET - List all clients
-export async function GET() {
-  try {
+// GET - List clients (ADMIN sees all, CLIENT sees only own data)
+export async function GET(request: NextRequest) {
+  return withAuth(request, async (clientId?: string) => {
+    if (clientId) {
+      // Client : ne voit que ses propres données
+      const { data: client, error } = await supabase
+        .from('clients')
+        .select('*')
+        .eq('id', clientId)
+        .single()
+
+      if (error || !client) {
+        return NextResponse.json({ error: 'Client non trouvé' }, { status: 404 })
+      }
+
+      const { data: modifications } = await supabase
+        .from('modifications')
+        .select('*')
+        .eq('client_id', clientId)
+
+      const { data: siteContents } = await supabase
+        .from('site_contents')
+        .select('client_id, id, generated_at')
+        .eq('client_id', clientId)
+
+      return NextResponse.json({
+        ...client,
+        modifications: modifications || [],
+        hasSite: (siteContents?.length || 0) > 0
+      })
+    }
+
+    // Admin : voit tous les clients
     const { data: clients, error: clientsError } = await supabase
       .from('clients')
       .select('*')
@@ -25,13 +56,10 @@ export async function GET() {
     }))
 
     return NextResponse.json(clientsWithRelations)
-  } catch (error) {
-    console.error('Error fetching clients:', error)
-    return NextResponse.json({ error: 'Erreur serveur' }, { status: 500 })
-  }
+  })
 }
 
-// POST - Create client (site generation is handled by the worker)
+// POST - Create client (public - registration)
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -41,7 +69,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Tous les champs sont requis' }, { status: 400 })
     }
 
-    // Generate unique slug
     const baseSlug = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
     let slug = baseSlug
     let counter = 1
@@ -54,7 +81,6 @@ export async function POST(request: NextRequest) {
       counter++
     }
 
-    // Create client
     const trialEndsAt = new Date()
     trialEndsAt.setDate(trialEndsAt.getDate() + 7)
 
@@ -66,15 +92,14 @@ export async function POST(request: NextRequest) {
 
     if (error) throw error
 
-    console.log(`✅ Client créé: ${name} (${activity}) - Le site sera généré automatiquement`)
+    console.log(`✅ Client créé: ${name} (${activity})`)
 
-    return NextResponse.json({ 
-      ...client, 
-      hasSite: false, 
+    return NextResponse.json({
+      ...client,
+      hasSite: false,
       siteUrl: `/${slug}`,
       message: 'Site en cours de génération par IA...'
     })
-
   } catch (error) {
     console.error('Error:', error)
     return NextResponse.json({ error: 'Erreur serveur' }, { status: 500 })
