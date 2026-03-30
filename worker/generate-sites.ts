@@ -1,8 +1,14 @@
 import { createClient } from '@supabase/supabase-js'
 import ZAI from 'z-ai-web-dev-sdk'
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
-const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+// ──────────────────────────────────────────────
+// Configuration
+// ──────────────────────────────────────────────
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const CONCURRENCY = parseInt(process.env.CONCURRENCY || '5')  // 5 sites en parallèle
+const MAX_CLIENTS = parseInt(process.env.MAX_CLIENTS || '50') // 50 clients max par run
+const RATE_LIMIT_DELAY = 2000  // 2s entre chaque appel IA
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error('Variables Supabase manquantes')
@@ -18,26 +24,46 @@ const zai = new ZAI({
   token: process.env.ZAI_TOKEN,
 })
 
-async function callAI(prompt: string, systemPrompt: string, maxRetries = 2): Promise<string> {
+// ──────────────────────────────────────────────
+// Appel IA avec retry et rate limiting
+// ──────────────────────────────────────────────
+async function callAI(prompt: string, systemPrompt: string, maxRetries = 3): Promise<string> {
   let lastError: Error | null = null
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const messages: { role: string; content: string }[] = []
       if (systemPrompt) messages.push({ role: 'system', content: systemPrompt })
       messages.push({ role: 'user', content: prompt })
-      const completion = await zai.chat.completions.create({ messages, temperature: 0.7, max_tokens: 16000 })
+      
+      const completion = await zai.chat.completions.create({
+        messages,
+        temperature: 0.7,
+        max_tokens: 4000,  // Réduit de 16000 → 4000 (4x plus rapide)
+      })
+      
       const content = completion.choices?.[0]?.message?.content
       if (!content) throw new Error('Pas de reponse')
       return content
-    } catch (error) {
+    } catch (error: any) {
       lastError = error as Error
-      console.error(`  Tentative ${attempt}/${maxRetries} echouee`)
-      if (attempt < maxRetries) await new Promise(r => setTimeout(r, attempt * 5000))
+      const isRateLimit = error?.message?.includes('429') || error?.status === 429
+      
+      if (isRateLimit) {
+        // Attendre plus longtemps si rate limited
+        const waitTime = Math.min(attempt * 10000, 30000) // 10s, 20s, 30s max
+        console.error(`  Rate limit (429) - attente ${waitTime / 1000}s...`)
+        await new Promise(r => setTimeout(r, waitTime))
+      } else if (attempt < maxRetries) {
+        await new Promise(r => setTimeout(r, attempt * 3000))
+      }
     }
   }
   throw lastError
 }
 
+// ──────────────────────────────────────────────
+// Parsing JSON robuste
+// ──────────────────────────────────────────────
 function parseAIJSON(content: string): { html: string; css: string } {
   let clean = content.trim()
   if (clean.includes('```json')) clean = clean.split('```json')[1]
@@ -47,40 +73,33 @@ function parseAIJSON(content: string): { html: string; css: string } {
   // Essayer JSON direct
   try { const r = JSON.parse(clean); if (r.html && r.css) return r } catch {}
 
-  // Extraire avec regex - le plus grand objet JSON possible
+  // Extraire avec regex
   const match = clean.match(/\{"html"\s*:\s*"[\s\S]*?"css"\s*:\s*"[\s\S]*?\}/)
   if (match) {
     try { const r = JSON.parse(match[0]); if (r.html && r.css) return r } catch {}
   }
 
-  // Essayer de réparer un JSON tronqué
+  // Réparer JSON tronqué
   const start = clean.indexOf('{')
   const end = clean.lastIndexOf('}')
   if (start !== -1 && end > start) {
     let candidate = clean.substring(start, end + 1)
     try { const r = JSON.parse(candidate); if (r.html && r.css) return r } catch {}
-    // Réparer : fermer les strings et accolades
     candidate = candidate.replace(/,\s*}/g, '}')
     try { const r = JSON.parse(candidate); if (r.html && r.css) return r } catch {}
   }
 
-  // Extraire html et css manuellement si possible (même si JSON tronqué)
+  // Extraction manuelle
   const htmlStart = clean.indexOf('"html"')
   const cssStart = clean.indexOf('"css"')
   if (htmlStart !== -1 && cssStart !== -1) {
-    // Extraire HTML: trouver le premier " après "html":
     const htmlValueStart = clean.indexOf('"', clean.indexOf(':', htmlStart)) + 1
-    // Extraire CSS: trouver le premier " après "css":
     const cssValueStart = clean.indexOf('"', clean.indexOf(':', cssStart)) + 1
-    // HTML va jusqu'à juste avant "css"
     const htmlValue = clean.substring(htmlValueStart, cssStart - 1).replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\t/g, '\t').trim()
-    // CSS va jusqu'à la fin (peut être tronqué)
     let cssValue = clean.substring(cssValueStart).replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\t/g, '\t')
-    // Fermer les accolades CSS si tronqué
     const openBraces = (cssValue.match(/\{/g) || []).length
     const closeBraces = (cssValue.match(/\}/g) || []).length
     cssValue += '}'.repeat(Math.max(0, openBraces - closeBraces))
-    // Retirer le dernier " si présent
     cssValue = cssValue.replace(/"\s*$/, '').trim()
     if (htmlValue.length > 50 && cssValue.length > 20) {
       return { html: htmlValue, css: cssValue }
@@ -90,57 +109,123 @@ function parseAIJSON(content: string): { html: string; css: string } {
   throw new Error('JSON invalide: ' + clean.substring(0, 300))
 }
 
+// ──────────────────────────────────────────────
+// Génération d'un site (prompt optimisé)
+// ──────────────────────────────────────────────
 async function generateSite(client: any): Promise<{ html: string; css: string }> {
   const phone = client.whatsapp.replace(/[^0-9]/g, '')
-  const prompt = `Crée un site web compact et professionnel pour:
-Entreprise: ${client.name}
-Activité: ${client.activity}
-Ville: ${client.city}
-Téléphone: ${client.whatsapp}
+  const prompt = `Site web pour: ${client.name}, ${client.activity} à ${client.city}.
+Sections: Hero, Services (3), Contact (WhatsApp: wa.me/${phone}), Footer. Bouton WhatsApp flottant.
+Style moderne, responsive mobile-first. Classes CSS courtes (a,b,c...).
+Réponds UNIQUEMENT en JSON: {"html":"...","css":"..."}`
 
-SECTIONS: Hero, Services (3 max), Contact avec lien WhatsApp (https://wa.me/${phone}), Footer.
-Bouton WhatsApp flottant.
-
-CONTRAINTES IMPORTANTES:
-- HTML COMPACT: max 150 lignes, pas de commentaires, classes CSS courtes (a,b,c,d...)
-- CSS COMPACT: max 200 lignes, utiliser des variables CSS pour les couleurs
-- Responsive mobile-first
-- Style moderne avec dégradés
-
-Réponds UNIQUEMENT en JSON valide: {"html":"...","css":"..."}
-Pas de texte avant ou après le JSON.`
-
-  const systemPrompt = `Tu es un expert web. Tu DOIS répondre UNIQUEMENT avec un objet JSON valide contenant exactement deux clés: "html" (le contenu HTML sans DOCTYPE ni head) et "css" (les styles CSS). Le JSON doit être complet et fermé correctement. Ne jamais tronquer ta réponse.`
-  const content = await callAI(prompt, systemPrompt, 3)
+  const systemPrompt = `Expert web. JSON valide avec "html" et "css". HTML sans DOCTYPE/head. Compact. Pas de texte avant/après JSON.`
+  const content = await callAI(prompt, systemPrompt)
   return parseAIJSON(content)
 }
 
-async function processPendingClients() {
-  // Traiter les plus récents en premier (ceux que les clients viennent de créer)
-  const { data: clients } = await supabase.from('clients').select('id, name, activity, city, address, whatsapp, slug').order('created_at', { ascending: false })
-  if (!clients?.length) { console.log('Aucun client'); return }
+// ──────────────────────────────────────────────
+// Traitement PARALLÈLE avec contrôle de concurrence
+// ──────────────────────────────────────────────
+async function processWithConcurrency(clients: any[]): Promise<{ success: number; failed: number }> {
+  let success = 0
+  let failed = 0
+  let index = 0
 
+  // Créer un pool de workers parallèles
+  const workers = Array.from({ length: CONCURRENCY }, async () => {
+    while (index < clients.length) {
+      const currentIndex = index++
+      const client = clients[currentIndex]
+      if (!client) break
+
+      const startTime = Date.now()
+      console.log(`[${currentIndex + 1}/${clients.length}] Generation: ${client.name} (${client.activity})...`)
+
+      try {
+        // Petit délai entre les appels pour éviter le rate limiting
+        if (currentIndex > 0) {
+          await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY))
+        }
+
+        const { html, css } = await generateSite(client)
+        
+        const { error } = await supabase
+          .from('site_contents')
+          .insert({ client_id: client.id, html_content: html, css_content: css })
+
+        if (error) {
+          // Vérifier si c'est un doublon (déjà généré par un autre run)
+          if (error.message.includes('duplicate key') || error.message.includes('unique')) {
+            console.log(`  Déjà généré (doublon): ${client.name}`)
+            // Ne pas compter comme échec
+          } else {
+            console.error(`  Erreur sauvegarde: ${error.message}`)
+            failed++
+          }
+        } else {
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+          console.log(`  OK: ${client.name} -> /${client.slug} (${elapsed}s)`)
+          success++
+        }
+      } catch (error: any) {
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+        console.error(`  ECHEC: ${client.name} - ${error.message} (${elapsed}s)`)
+        failed++
+      }
+    }
+  })
+
+  await Promise.all(workers)
+  return { success, failed }
+}
+
+// ──────────────────────────────────────────────
+// Point d'entrée principal
+// ──────────────────────────────────────────────
+async function processPendingClients() {
+  const startTime = Date.now()
+
+  // 1. Récupérer tous les clients sans site
+  const { data: clients } = await supabase
+    .from('clients')
+    .select('id, name, activity, city, address, whatsapp, slug')
+    .order('created_at', { ascending: false })
+
+  if (!clients?.length) {
+    console.log('Aucun client dans la base')
+    return
+  }
+
+  // 2. Récupérer les sites déjà générés
   const { data: existingSites } = await supabase.from('site_contents').select('client_id')
   const generatedIds = new Set(existingSites?.map(s => s.client_id) || [])
   const pending = clients.filter(c => !generatedIds.has(c.id))
 
-  if (pending.length === 0) { console.log('Tous les clients ont un site'); return }
+  if (pending.length === 0) {
+    console.log('Tous les clients ont un site')
+    return
+  }
 
-  console.log(`${pending.length} client(s) en attente`)
+  const toProcess = pending.slice(0, MAX_CLIENTS)
+  console.log(`=== Worker IASN ===`)
+  console.log(`${pending.length} client(s) en attente, traitement de ${toProcess.length} (concurrence: ${CONCURRENCY})`)
+  console.log(`Heure de début: ${new Date().toISOString()}`)
 
-  const maxClients = parseInt(process.env.MAX_CLIENTS || '1')
-  const toProcess = pending.slice(0, maxClients)
+  // 3. Traiter en parallèle
+  const { success, failed } = await processWithConcurrency(toProcess)
 
-  for (const client of toProcess) {
-    console.log(`\nGeneration pour: ${client.name} (${client.activity})...`)
-    try {
-      const { html, css } = await generateSite(client)
-      const { error } = await supabase.from('site_contents').insert({ client_id: client.id, html_content: html, css_content: css })
-      if (error) { console.error(`Erreur sauvegarde: ${error.message}`) } else { console.log(`OK: ${client.name} -> /${client.slug}`) }
-    } catch (error) { console.error(`Echec ${client.name}:`, (error as Error).message) }
-    if (toProcess.indexOf(client) < toProcess.length - 1) await new Promise(r => setTimeout(r, 5000))
+  const totalTime = ((Date.now() - startTime) / 1000).toFixed(1)
+  console.log(`\n=== Résultat ===`)
+  console.log(`Succès: ${success}, Échecs: ${failed}`)
+  console.log(`Temps total: ${totalTime}s`)
+  console.log(`Temps moyen par site: ${(parseFloat(totalTime) / Math.max(success + failed, 1)).toFixed(1)}s`)
+  if (pending.length > MAX_CLIENTS) {
+    console.log(`${pending.length - MAX_CLIENTS} client(s) restant(s) pour le prochain run`)
   }
 }
 
-console.log('--- Worker IASN ---')
-processPendingClients().then(() => process.exit(0)).catch(e => { console.error('Erreur:', e); process.exit(1) })
+// Lancement
+processPendingClients()
+  .then(() => process.exit(0))
+  .catch(e => { console.error('Erreur fatale:', e); process.exit(1) })
