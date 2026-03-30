@@ -1,8 +1,6 @@
 'use client'
 
 import { useEffect, useState, use } from 'react'
-import { useParams } from 'next/navigation'
-import { notFound } from 'next/navigation'
 
 export default function SitePage() {
   const { slug } = use()
@@ -10,23 +8,30 @@ export default function SitePage() {
   const [hasSite, setHasSite] = useState(false)
   const [client, setClient] = useState<any>(null)
   const [site, setSite] = useState<{ html: string; css: string } | null>(null)
-  const [error, setError] = useState(false)
+  const [error, setError] = useState<string | null>(null) // 'not_found' | 'network' | null
+  const [checkCount, setCheckCount] = useState(0)
 
-  // Polling: vérifie si le site est prêt
   const checkSite = async () => {
     try {
       const res = await fetch(`/api/site-data?slug=${encodeURIComponent(slug)}`, {
         headers: { 'Cache-Control': 'no-cache' },
       })
-      
+
       if (!res.ok) {
-        setError(true)
+        setError('not_found')
         setLoading(false)
         return false
       }
 
       const data = await res.json()
       setClient(data.client)
+
+      // Update page title
+      if (data.client?.name) {
+        document.title = hasSite
+          ? `${data.client.name} - ${data.client.activity}`
+          : `${data.client.name} - Site en cours de création`
+      }
 
       if (data.hasSite && data.site) {
         setHasSite(true)
@@ -35,10 +40,11 @@ export default function SitePage() {
         return true
       }
 
+      setLoading(false)
+      setCheckCount(prev => prev + 1)
       return false
-    } catch (err) {
-      console.error('Erreur vérification:', err)
-      setError(true)
+    } catch {
+      setError('network')
       setLoading(false)
       return false
     }
@@ -47,184 +53,272 @@ export default function SitePage() {
   useEffect(() => {
     if (!slug) return
 
-    // Première vérification immédiate
+    // Premier appel immédiat
     checkSite()
 
-    // Puis polling toutes les 10 secondes
+    // Polling toutes les 30 secondes
     const interval = setInterval(async () => {
       const found = await checkSite()
-      if (found) {
-        clearInterval(interval)
-      }
-    }, 10000)
+      if (found) clearInterval(interval)
+    }, 30000)
 
-    // Arrêter après 5 minutes
-    const timeout = setTimeout(() => {
-      clearInterval(interval)
-      setLoading(false)
-      setError(true)
-    }, 300000)
-
-    return () => {
-      clearInterval(interval)
-      clearTimeout(timeout)
-    }
+    return () => clearInterval(interval)
   }, [slug])
 
-  // Page 404
-  if (error && !client) {
-    notFound()
+  // ──────────────────────────────────────────────
+  // État 1 : Client non trouvé (pas de 404erreur, juste un message propre)
+  // ──────────────────────────────────────────────
+  if (error === 'not_found') {
+    return (
+      <div style={styles.notFoundContainer}>
+        <div style={styles.notFoundBox}>
+          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🔍</div>
+          <h1 style={styles.notFoundTitle}>Site non trouvé</h1>
+          <p style={styles.notFoundText}>
+            Ce site n&apos;existe pas ou a été supprimé.
+          </p>
+          <a href="/" style={styles.notFoundButton}>
+            ← Retour à l&apos;accueil
+          </a>
+        </div>
+      </div>
+    )
   }
 
-  // Page d'attente
-  if (loading || (!hasSite && !error)) {
+  // ──────────────────────────────────────────────
+  // État 2 : Erreur réseau
+  // ──────────────────────────────────────────────
+  if (error === 'network') {
     return (
-      <html lang="fr">
-        <head>
-          <meta charSet="utf-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <title>{client?.name || '...'} - Site en cours de création</title>
-          <meta name="robots" content="noindex" />
-          <style dangerouslySetInnerHTML={{ __html: `
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { 
-              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-              min-height: 100vh;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-              color: white;
-              padding: 1rem;
-            }
-            .container { text-align: center; max-width: 420px; }
-            h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
-            .activity { font-size: 1.1rem; opacity: 0.9; margin-bottom: 2rem; }
-            .card {
-              background: rgba(255,255,255,0.15);
-              backdrop-filter: blur(10px);
-              border-radius: 20px;
-              padding: 2.5rem 2rem;
-              margin-bottom: 1.5rem;
-            }
-            .icon { font-size: 4rem; margin-bottom: 1rem; display: block; }
-            .loader {
-              width: 44px;
-              height: 44px;
-              border: 3px solid rgba(255,255,255,0.3);
-              border-top-color: white;
-              border-radius: 50%;
-              animation: spin 1s linear infinite;
-              margin: 0 auto 1.2rem;
-            }
-            @keyframes spin { to { transform: rotate(360deg); } }
-            .title { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.5rem; }
-            .info { font-size: 0.9rem; opacity: 0.85; line-height: 1.5; }
-            .steps { text-align: left; margin-top: 1.5rem; font-size: 0.85rem; opacity: 0.8; }
-            .steps div { padding: 0.4rem 0; }
-            .steps .done { opacity: 0.6; text-decoration: line-through; }
-            .refresh { 
-              font-size: 0.8rem; opacity: 0.6; margin-top: 1.5rem; 
-              display: flex; align-items: center; justify-content: center; gap: 0.5rem;
-            }
-            .pulse { animation: pulse 2s ease-in-out infinite; }
-            @keyframes pulse { 0%,100% { opacity: 0.6; } 50% { opacity: 1; } }
-            .whatsapp {
-              display: inline-flex;
-              align-items: center;
-              gap: 0.5rem;
-              background: #25d366;
-              color: white;
-              padding: 0.75rem 1.5rem;
-              border-radius: 50px;
-              text-decoration: none;
-              font-weight: 600;
-              font-size: 0.95rem;
-            }
-          `}} />
-        </head>
-        <body>
-          <div className="container">
-            <h1>{client?.name || '...'}</h1>
-            <p className="activity">{client?.activity || ''} • {client?.city || ''}</p>
-            <div className="card">
-              <span className="icon">🎨</span>
-              <div className="loader"></div>
-              <p className="title">Votre site est en cours de création</p>
-              <p className="info">
-                Notre IA est en train de concevoir votre site web unique. Cela prend environ 1 à 2 minutes.
-              </p>
-              <div className="steps">
-                <div className="done">✅ Informations enregistrées</div>
-                <div>🔄 Design IA en cours...</div>
-                <div>⏳ Publication imminente</div>
-              </div>
+      <div style={styles.notFoundContainer}>
+        <div style={styles.notFoundBox}>
+          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>⚠️</div>
+          <h1 style={{ ...styles.notFoundTitle, color: '#f59e0b' }}>Connexion impossible</h1>
+          <p style={styles.notFoundText}>
+            Vérifiez votre connexion internet et réessayez.
+          </p>
+          <button
+            onClick={() => { setError(null); setLoading(true); checkSite() }}
+            style={styles.notFoundButton}
+          >
+            🔄 Réessayer
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // ──────────────────────────────────────────────
+  // État 3 : Site en attente de création (PAS de spinner, PAS d'animation)
+  // ──────────────────────────────────────────────
+  if (!hasSite || loading) {
+    return (
+      <div style={styles.waitingContainer}>
+        <div style={styles.waitingBox}>
+          {/* Header avec nom du client */}
+          <h1 style={styles.waitingTitle}>{client?.name || '...'}</h1>
+          <p style={styles.waitingSubtitle}>
+            {[client?.activity, client?.city].filter(Boolean).join(' • ') || ''}
+          </p>
+
+          {/* Card principale */}
+          <div style={styles.waitingCard}>
+            <div style={styles.waitingIcon}>🎨</div>
+            <h2 style={styles.waitingCardTitle}>Votre site est en cours de création</h2>
+            <p style={styles.waitingCardText}>
+              Notre IA est en train de concevoir votre site web unique et professionnel.
+              Cela prend généralement entre 1 et 3 minutes.
+            </p>
+
+            {/* Étapes */}
+            <div style={styles.waitingSteps}>
+              <div style={styles.stepDone}>✅ Informations enregistrées</div>
+              <div style={styles.stepInProgress}>🔄 Design IA en cours...</div>
+              <div style={styles.stepPending}>⏳ Publication imminente</div>
             </div>
-            <p className="refresh pulse">La page se met à jour automatiquement</p>
-            <a 
-              href={`https://wa.me/${client?.whatsapp?.replace(/[^0-9]/g, '') || ''}`} 
-              className="whatsapp"
+          </div>
+
+          {/* Info de rafraîchissement + compteur */}
+          <p style={styles.waitingInfo}>
+            {checkCount > 0
+              ? `Vérification automatique toutes les 30 secondes (${checkCount} vérification${checkCount > 1 ? 's' : ''})`
+              : 'Première vérification en cours...'}
+          </p>
+
+          {/* Bouton de vérification manuelle */}
+          <button
+            onClick={() => checkSite()}
+            style={styles.refreshButton}
+          >
+            Vérifier maintenant ↻
+          </button>
+
+          {/* WhatsApp */}
+          {client?.whatsapp && (
+            <a
+              href={`https://wa.me/${client.whatsapp.replace(/[^0-9]/g, '')}`}
               target="_blank"
               rel="noopener noreferrer"
+              style={styles.whatsappButton}
             >
               💬 Nous contacter sur WhatsApp
             </a>
-          </div>
-        </body>
-      </html>
+          )}
+        </div>
+      </div>
     )
   }
 
-  // Erreur / timeout
-  if (error) {
-    return (
-      <html lang="fr">
-        <head>
-          <meta charSet="utf-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <title>Erreur - Site non trouvé</title>
-          <meta name="robots" content="noindex" />
-          <style dangerouslySetInnerHTML={{ __html: `
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { font-family: -apple-system, sans-serif; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f3f4f6; color: #333; }
-            .container { text-align: center; padding: 2rem; }
-            h1 { font-size: 2rem; margin-bottom: 1rem; color: #ef4444; }
-            p { font-size: 1.1rem; color: #666; margin-bottom: 2rem; }
-            a { display: inline-block; padding: 0.75rem 2rem; background: #3b82f6; color: white; border-radius: 12px; text-decoration: none; font-weight: 600; }
-          `}} />
-        </head>
-        <body>
-          <div className="container">
-            <h1>⚠️ Site en cours de création</h1>
-            <p>Le site n'est pas encore prêt. Veuillez revenir dans quelques minutes.</p>
-            <a href="/">Retour à l'accueil</a>
-          </div>
-        </body>
-      </html>
-    )
-  }
-
-  // Site prêt !
+  // ──────────────────────────────────────────────
+  // État 4 : Site prêt !
+  // ──────────────────────────────────────────────
   if (hasSite && site) {
     return (
-      <html lang="fr">
-        <head>
-          <meta charSet="utf-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <title>{client?.name} - {client?.activity}</title>
-          <meta name="description" content={`${client?.name} - ${client?.activity} à ${client?.city}`} />
-          <meta name="robots" content="noindex" />
-          <style dangerouslySetInnerHTML={{ __html: `
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            ${site.css || ''}
-          `}} />
-        </head>
-        <body>
-          <div dangerouslySetInnerHTML={{ __html: site.html }} />
-        </body>
-      </html>
+      <>
+        <style dangerouslySetInnerHTML={{ __html: site.css || '' }} />
+        <div dangerouslySetInnerHTML={{ __html: site.html }} />
+      </>
     )
   }
 
   return null
+}
+
+// ──────────────────────────────────────────────
+// Styles inline (pas de dépendance Tailwind, pas de className, pas d'animation)
+// ──────────────────────────────────────────────
+const styles: Record<string, React.CSSProperties> = {
+  notFoundContainer: {
+    minHeight: '100vh',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: '#f3f4f6',
+    padding: '1rem',
+  },
+  notFoundBox: {
+    textAlign: 'center' as const,
+    padding: '2rem',
+  },
+  notFoundTitle: {
+    fontSize: '2rem',
+    marginBottom: '1rem',
+    color: '#ef4444',
+  },
+  notFoundText: {
+    fontSize: '1.1rem',
+    color: '#666',
+    marginBottom: '2rem',
+    lineHeight: 1.6,
+  },
+  notFoundButton: {
+    display: 'inline-block',
+    padding: '0.75rem 2rem',
+    background: '#3b82f6',
+    color: 'white',
+    borderRadius: '12px',
+    textDecoration: 'none' as const,
+    fontWeight: 600,
+    fontSize: '1rem',
+    border: 'none' as const,
+    cursor: 'pointer',
+  },
+
+  // Waiting page
+  waitingContainer: {
+    minHeight: '100vh',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    padding: '1rem',
+    color: 'white',
+  },
+  waitingBox: {
+    textAlign: 'center' as const,
+    maxWidth: '440px',
+    width: '100%',
+  },
+  waitingTitle: {
+    fontSize: '1.8rem',
+    marginBottom: '0.5rem',
+    fontWeight: 700,
+  },
+  waitingSubtitle: {
+    fontSize: '1.05rem',
+    opacity: 0.9,
+    marginBottom: '2rem',
+  },
+  waitingCard: {
+    background: 'rgba(255, 255, 255, 0.15)',
+    backdropFilter: 'blur(10px)',
+    borderRadius: '20px',
+    padding: '2.5rem 2rem',
+    marginBottom: '1.5rem',
+    textAlign: 'left' as const,
+  },
+  waitingIcon: {
+    fontSize: '4rem',
+    marginBottom: '1rem',
+    textAlign: 'center' as const,
+  },
+  waitingCardTitle: {
+    fontSize: '1.15rem',
+    fontWeight: 600,
+    marginBottom: '0.5rem',
+    textAlign: 'center' as const,
+  },
+  waitingCardText: {
+    fontSize: '0.9rem',
+    opacity: 0.85,
+    lineHeight: 1.6,
+    marginBottom: '1.5rem',
+    textAlign: 'center' as const,
+  },
+  waitingSteps: {
+    fontSize: '0.85rem',
+    opacity: 0.8,
+  },
+  stepDone: {
+    padding: '0.4rem 0',
+    opacity: 0.6,
+    textDecoration: 'line-through' as const,
+  },
+  stepInProgress: {
+    padding: '0.4rem 0',
+    fontWeight: 600,
+  },
+  stepPending: {
+    padding: '0.4rem 0',
+    opacity: 0.6,
+  },
+  waitingInfo: {
+    fontSize: '0.8rem',
+    opacity: 0.6,
+    marginBottom: '1rem',
+  },
+  refreshButton: {
+    display: 'inline-block',
+    background: 'rgba(255, 255, 255, 0.2)',
+    border: '1px solid rgba(255, 255, 255, 0.3)',
+    color: 'white',
+    padding: '0.7rem 1.8rem',
+    borderRadius: '50px',
+    cursor: 'pointer',
+    fontSize: '0.95rem',
+    fontWeight: 500,
+    marginBottom: '1rem',
+  },
+  whatsappButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+    background: '#25d366',
+    color: 'white',
+    padding: '0.75rem 1.5rem',
+    borderRadius: '50px',
+    textDecoration: 'none' as const,
+    fontWeight: 600,
+    fontSize: '0.95rem',
+  },
 }
