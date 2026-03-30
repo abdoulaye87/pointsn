@@ -1,43 +1,90 @@
-import { supabase } from '@/lib/supabase'
+'use client'
+
+import { useEffect, useState, use } from 'react'
+import { useParams } from 'next/navigation'
 import { notFound } from 'next/navigation'
 
-export const dynamic = 'force-dynamic'
-export const revalidate = 0
+export default function SitePage() {
+  const { slug } = use()
+  const [loading, setLoading] = useState(true)
+  const [hasSite, setHasSite] = useState(false)
+  const [client, setClient] = useState<any>(null)
+  const [site, setSite] = useState<{ html: string; css: string } | null>(null)
+  const [error, setError] = useState(false)
 
-export default async function SitePage({ 
-  params 
-}: { 
-  params: Promise<{ slug: string }> 
-}) {
-  const { slug } = await params
-  
-  // Récupérer le client
-  const { data: client, error: clientError } = await supabase
-    .from('clients')
-    .select('*')
-    .eq('slug', slug)
-    .single()
+  // Polling: vérifie si le site est prêt
+  const checkSite = async () => {
+    try {
+      const res = await fetch(`/api/site-data?slug=${encodeURIComponent(slug)}`, {
+        headers: { 'Cache-Control': 'no-cache' },
+      })
+      
+      if (!res.ok) {
+        setError(true)
+        setLoading(false)
+        return false
+      }
 
-  if (clientError || !client) {
+      const data = await res.json()
+      setClient(data.client)
+
+      if (data.hasSite && data.site) {
+        setHasSite(true)
+        setSite(data.site)
+        setLoading(false)
+        return true
+      }
+
+      return false
+    } catch (err) {
+      console.error('Erreur vérification:', err)
+      setError(true)
+      setLoading(false)
+      return false
+    }
+  }
+
+  useEffect(() => {
+    if (!slug) return
+
+    // Première vérification immédiate
+    checkSite()
+
+    // Puis polling toutes les 10 secondes
+    const interval = setInterval(async () => {
+      const found = await checkSite()
+      if (found) {
+        clearInterval(interval)
+      }
+    }, 10000)
+
+    // Arrêter après 5 minutes
+    const timeout = setTimeout(() => {
+      clearInterval(interval)
+      setLoading(false)
+      setError(true)
+    }, 300000)
+
+    return () => {
+      clearInterval(interval)
+      clearTimeout(timeout)
+    }
+  }, [slug])
+
+  // Page 404
+  if (error && !client) {
     notFound()
   }
 
-  // Récupérer le contenu du site généré
-  const { data: siteContent } = await supabase
-    .from('site_contents')
-    .select('*')
-    .eq('client_id', client.id)
-    .single()
-
-  // Si pas de site généré, afficher page d'attente
-  if (!siteContent) {
+  // Page d'attente
+  if (loading || (!hasSite && !error)) {
     return (
       <html lang="fr">
         <head>
           <meta charSet="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <title>{client.name} - Site en cours de création</title>
-          <meta httpEquiv="refresh" content="30" />
+          <title>{client?.name || '...'} - Site en cours de création</title>
+          <meta name="robots" content="noindex" />
           <style dangerouslySetInnerHTML={{ __html: `
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body { 
@@ -98,9 +145,8 @@ export default async function SitePage({
         </head>
         <body>
           <div className="container">
-            <h1>{client.name}</h1>
-            <p className="activity">{client.activity} • {client.city}</p>
-            
+            <h1>{client?.name || '...'}</h1>
+            <p className="activity">{client?.activity || ''} • {client?.city || ''}</p>
             <div className="card">
               <span className="icon">🎨</span>
               <div className="loader"></div>
@@ -114,11 +160,9 @@ export default async function SitePage({
                 <div>⏳ Publication imminente</div>
               </div>
             </div>
-
-            <p className="refresh pulse">La page se rafraîchit automatiquement toutes les 30 secondes</p>
-
+            <p className="refresh pulse">La page se met à jour automatiquement</p>
             <a 
-              href={`https://wa.me/${client.whatsapp.replace(/[^0-9]/g, '')}`} 
+              href={`https://wa.me/${client?.whatsapp?.replace(/[^0-9]/g, '') || ''}`} 
               className="whatsapp"
               target="_blank"
               rel="noopener noreferrer"
@@ -131,22 +175,56 @@ export default async function SitePage({
     )
   }
 
-  // Afficher le site généré
-  return (
-    <html lang="fr">
-      <head>
-        <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>{client.name} - {client.activity}</title>
-        <meta name="description" content={`${client.name} - ${client.activity} à ${client.city}`} />
-        <style dangerouslySetInnerHTML={{ __html: `
-          * { margin: 0; padding: 0; box-sizing: border-box; }
-          ${siteContent.css_content || ''}
-        `}} />
-      </head>
-      <body>
-        <div dangerouslySetInnerHTML={{ __html: siteContent.html_content }} />
-      </body>
-    </html>
-  )
+  // Erreur / timeout
+  if (error) {
+    return (
+      <html lang="fr">
+        <head>
+          <meta charSet="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>Erreur - Site non trouvé</title>
+          <meta name="robots" content="noindex" />
+          <style dangerouslySetInnerHTML={{ __html: `
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: -apple-system, sans-serif; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f3f4f6; color: #333; }
+            .container { text-align: center; padding: 2rem; }
+            h1 { font-size: 2rem; margin-bottom: 1rem; color: #ef4444; }
+            p { font-size: 1.1rem; color: #666; margin-bottom: 2rem; }
+            a { display: inline-block; padding: 0.75rem 2rem; background: #3b82f6; color: white; border-radius: 12px; text-decoration: none; font-weight: 600; }
+          `}} />
+        </head>
+        <body>
+          <div className="container">
+            <h1>⚠️ Site en cours de création</h1>
+            <p>Le site n'est pas encore prêt. Veuillez revenir dans quelques minutes.</p>
+            <a href="/">Retour à l'accueil</a>
+          </div>
+        </body>
+      </html>
+    )
+  }
+
+  // Site prêt !
+  if (hasSite && site) {
+    return (
+      <html lang="fr">
+        <head>
+          <meta charSet="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>{client?.name} - {client?.activity}</title>
+          <meta name="description" content={`${client?.name} - ${client?.activity} à ${client?.city}`} />
+          <meta name="robots" content="noindex" />
+          <style dangerouslySetInnerHTML={{ __html: `
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            ${site.css || ''}
+          `}} />
+        </head>
+        <body>
+          <div dangerouslySetInnerHTML={{ __html: site.html }} />
+        </body>
+      </html>
+    )
+  }
+
+  return null
 }
